@@ -1,0 +1,1469 @@
+---
+title: "Stroke Cause binary"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Load data
+
+```{r, echo=FALSE}
+load("C:/Users/morit/Documents/Fachhochschule/IDP/Projekte/Stroke/Data/Bern/train_imputed_all1_cause.Rda")
+load("C:/Users/morit/Documents/Fachhochschule/IDP/Projekte/Stroke/Data/Bern/test_imputed_all1_cause.Rda")
+stroke_dat_dwi_train_1 <- stroke_dat_dwi_train_1[-1]
+stroke_dat_dwi_test_1 <- stroke_dat_dwi_test_1[-1]
+fold1 <- rbind(stroke_dat_dwi_train_1, stroke_dat_dwi_test_1)
+
+load("C:/Users/morit/Documents/Fachhochschule/IDP/Projekte/Stroke/Data/Bern/data_bern_25_11_2020_dwi_imputed.Rda")
+
+raw_data_cols <- colnames(stroke_dat_dwi_imp)
+imp_data_cols <- colnames(fold1)
+additional_cols <- setdiff(imp_data_cols, raw_data_cols)
+ind <- rep(NA, 92)
+c <- 1
+for(col in additional_cols){
+  ind[c] <- which(col == imp_data_cols)
+  c <- c+1
+}
+
+dat_train <- subset(stroke_dat_dwi_train_1, select = -ind)
+dat_test <- subset(stroke_dat_dwi_test_1, select = -ind)
+
+```
+
+```{r, echo=FALSE}
+# Standardize data
+standardize <- function(x){
+    z <- (x-mean(x))/sd(x)
+    return(z)
+  }
+num_cols <- NA
+c <- 1
+for(col in dat_train){
+  num_cols[c] <- ifelse(is.numeric(col), T, F)
+  c <-c+1
+}
+num_cols <- which(num_cols == T)
+
+dat_train[num_cols] <- apply(dat_train[num_cols], 2, standardize)
+dat_test[num_cols] <- apply(dat_test[num_cols], 2, standardize)
+dat <- rbind(dat_train, dat_test)
+```
+
+
+## overview class labels:
+
+1: Makroangiopathie (Ablagerungen/Verkalkungen grosser Blutgefässe)<br>
+2: kardioembolisch  (Thrombenbildung durch Vorhofflimmern)<br>
+3: Mikroangiopathie (Ablagerungen/Verkalkungen grosser Blutgefässe)<br>
+4: Andere<br>
+5: ungeklaert (Abklaerung komplett)<br>
+6: ungeklaert (Abklaerung inkomplett)<br>
+7: Mehrere moegliche Ursachen<br>
+
+```{r, echo=FALSE}
+barplot(table(dat$toast), ylim = c(0,110)) 
+```
+
+
+## transform class labels (reduce to binary labels)
+
+0: nicht kardioembolisch<br>
+1: kardioembolisch<br>
+
+```{r, echo=FALSE, include=FALSE, warning=F}
+dat_train$toast <- gsub(pattern = 1, replacement = 0, dat_train$toast) # class 1 to class 0
+dat_train$toast <- gsub(pattern = 2, replacement = 1, dat_train$toast) # class 2 to class 1
+dat_train$toast <- gsub(pattern = 3, replacement = 0, dat_train$toast) # rest of classes to 0
+dat_train$toast <- gsub(pattern = 4, replacement = 0, dat_train$toast)
+dat_train$toast <- gsub(pattern = 5, replacement = 0, dat_train$toast)
+dat_train$toast <- gsub(pattern = 6, replacement = 0, dat_train$toast)
+dat_train$toast <- gsub(pattern = 7, replacement = 0, dat_train$toast)
+dat_train$toast <- as.factor(dat_train$toast)
+
+
+dat_test$toast <- gsub(pattern = 1, replacement = 0, dat_test$toast) # class 1 to class 0
+dat_test$toast <- gsub(pattern = 2, replacement = 1, dat_test$toast) # class 2 to class 1
+dat_test$toast <- gsub(pattern = 3, replacement = 0, dat_test$toast) # rest of classes to 0
+dat_test$toast <- gsub(pattern = 4, replacement = 0, dat_test$toast)
+dat_test$toast <- gsub(pattern = 5, replacement = 0, dat_test$toast)
+dat_test$toast <- gsub(pattern = 6, replacement = 0, dat_test$toast)
+dat_test$toast <- gsub(pattern = 7, replacement = 0, dat_test$toast)
+dat_test$toast <- as.factor(dat_test$toast)
+
+dat <- rbind(dat_train, dat_test)
+y <- dat_train$toast
+```
+
+```{r, echo=FALSE}
+barplot(table(dat$toast), ylim = c(0,180)) # new class distr.
+table(dat$toast)
+```
+```{r, echo=F, warning=F}
+ncAFT <- which(dat$toast == 0 & dat$atrial_fibrillation == 1) # non cardioembolic cause but atrial fibrillation
+ncAFF <- which(dat$toast == 0 & dat$atrial_fibrillation == 0)
+cAFF <- which(dat$toast == 1 & dat$atrial_fibrillation == 0) # cardioembolic cause but no atrial fibrillation
+cAFT <- which(dat$toast == 1 & dat$atrial_fibrillation == 1)
+
+dat$ncAFT <- as.factor(ifelse(row.names(dat) %in% ncAFT, 1, 0))
+dat$cAFF <- as.factor(ifelse(row.names(dat) %in% cAFF, 1, 0))
+dat$contradiction <- as.factor(ifelse(dat$ncAFT == 1 | dat$cAFF == 1, 1, 0))
+
+```
+
+## Analysis of fetaures depending on cause
+
+```{r, echo=F, warning=F}
+library(ggplot2)
+ggplot() +
+  geom_boxplot(data = dat, aes(x = toast, y = time_to_groin_puncture), alpha = 0.5, notch = TRUE) +
+  geom_jitter(data = dat, aes(x = toast, y = time_to_groin_puncture, color = toast), size = 2.5, width = 0.3, alpha = 0.4) +
+  geom_point(data = dat[c(ncAFT, cAFF),], aes(x = toast, y = time_to_groin_puncture), size = 4, shape = 18, color = "green4") +
+  labs(x = "cause", y = "Time to groin puncture", title = "Time to groin puncture Distribution by cause") +
+  theme(text = element_text(size=15), axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1)) +
+  scale_color_manual(values = c("blue", "red"), name = "cause")
+
+ggplot() +
+  geom_boxplot(data = dat, aes(x = toast, y = age), alpha = 0.5, notch = TRUE) +
+  geom_jitter(data = dat, aes(x = toast, y = age, color = toast), size = 2.5, width = 0.3, alpha = 0.4) +
+  geom_point(data = dat[c(ncAFT, cAFF),], aes(x = toast, y = age), size = 4, shape = 18, color = "green4") +
+  labs(x = "cause", y = "Age", title = "Age Distribution by cause") +
+  theme(text = element_text(size=15), axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1)) +
+  scale_color_manual(values = c("blue", "red"), name = "cause")
+
+ggplot() +
+  geom_boxplot(data = dat, aes(x = toast, y = nihss_bl), alpha = 0.5, notch = TRUE) +
+  geom_jitter(data = dat, aes(x = toast, y = nihss_bl, color = toast), size = 2.5, width = 0.3, alpha = 0.4) +
+  geom_point(data = dat[c(ncAFT, cAFF),], aes(x = toast, y = nihss_bl), size =4 , shape = 18, color = "green4") +
+  labs(x = "cause", y = "NIHSS", title = "NIHSS Distribution by cause") +
+  theme(text = element_text(size=15), axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1)) +
+  scale_color_manual(values = c("blue", "red"), name = "cause")
+
+ggplot() +
+  geom_boxplot(data = dat, aes(x = toast, y = inr), alpha = 0.5, notch = F) +
+  scale_y_continuous(limits=c(-1,5)) +
+  geom_jitter(data = dat, aes(x = toast, y = inr, color = toast), size = 2.5, width = 0.3, alpha = 0.4) +
+  geom_point(data = dat[c(ncAFT, cAFF),], aes(x = toast, y = inr), size =4 , shape = 18, color = "green4") +
+  labs(x = "cause", y = "INR", title = "INR Distribution by cause") +
+  theme(text = element_text(size=15), axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1)) +
+  scale_color_manual(values = c("blue", "red"), name = "cause")
+
+ggplot() +
+  geom_boxplot(data = dat, aes(x = toast, y = triglyceride), alpha = 0.5, notch = F) +
+  geom_jitter(data = dat, aes(x = toast, y = triglyceride, color = toast), size = 2.5, width = 0.3, alpha = 0.4) +
+  geom_point(data = dat[c(ncAFT, cAFF),], aes(x = toast, y = triglyceride), size =4 , shape = 18, color = "green4") +
+  labs(x = "cause", y = "triglyceride", title = "triglyceride Distribution by cause") +
+  theme(text = element_text(size=15), axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1)) +
+  scale_color_manual(values = c("blue", "red"), name = "cause")
+
+ggplot() +
+  geom_boxplot(data = dat, aes(x = toast, y = sys_bloodpressure_bl), alpha = 0.5, notch = F) +
+  geom_jitter(data = dat, aes(x = toast, y = sys_bloodpressure_bl, color = toast), size = 2.5, width = 0.3, alpha = 0.4) +
+  geom_point(data = dat[c(ncAFT, cAFF),], aes(x = toast, y = sys_bloodpressure_bl), size =4 , shape = 18, color = "green4") +
+  labs(x = "cause", y = "systolic bloodpressure", title = "systolic bloodpressure Distribution by cause") +
+  theme(text = element_text(size=15), axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1)) +
+  scale_color_manual(values = c("blue", "red"), name = "cause")
+
+
+
+```
+
+
+
+## Random Forest Model
+
+```{r, echo=FALSE, include=F, warning=F}
+library(randomForest)
+```
+```{r, echo=FALSE}
+set.seed(206)
+cols_stroke_outcome <- c(1,4,9,19,20,22,25,28,30) # Features of stroke outcome model
+cause.rf <- randomForest(toast ~ ., data=dat[union(c(1,2,6,15,17,18,23,36),cols_stroke_outcome)], importance=T)
+cause.rf.light <- randomForest(toast ~ ., data=dat[union(c(1,2,6,15,17,23,36),cols_stroke_outcome)], importance=T)
+
+```
+```{r, echo=FALSE}
+print(cause.rf)
+plot(cause.rf)
+varImpPlot(cause.rf)
+
+layout(matrix(c(1,2),nrow=1),
+       width=c(4,1)) 
+par(mar=c(5,4,4,0)) #No margin on the right side
+plot(cause.rf, log="y")
+par(mar=c(5,0,4,2)) #No margin on the left side
+plot(c(0,1),type="n", axes=F, xlab="", ylab="")
+legend("top", colnames(cause.rf$err.rate),col=1:3,cex=0.8,fill=1:3)
+
+head(cause.rf$err.rate)
+
+
+print(cause.rf.light)
+plot(cause.rf.light)
+varImpPlot(cause.rf.light)
+```
+```{r, echo=F}
+# Bootstrap Random Forest
+library(ROCR)
+N <- 100
+acc_rf_full <- rep(NA, N)
+acc_rf_light <- rep(NA, N)
+auc_rf_full <- rep(NA, N)
+auc_rf_light <-rep(NA, N)
+set.seed(206)
+
+for(i in 1:N){
+  boot.indices <- sample(1:dim(dat)[1], replace=T)
+  boot.dat <- dat[boot.indices, ]
+  
+  cause.rf.f <- randomForest(toast ~ ., data=boot.dat[union(c(1,2,6,15,17,18,23,36),cols_stroke_outcome)], importance=T)
+  cause.rf.l <- randomForest(toast ~ ., data=boot.dat[union(c(1,2,6,15,17,23,36),cols_stroke_outcome)], importance=T)
+  
+  acc_rf_full[i] <- 1 - as.numeric(cause.rf.f$err.rate[nrow(cause.rf.f$err.rate), "OOB"])
+  acc_rf_light[i] <- 1 - as.numeric(cause.rf.l$err.rate[nrow(cause.rf.l$err.rate), "OOB"])
+  
+  rf_p_oob.f <- predict(cause.rf.f, type="prob")[,2]
+  rf_pr_oob.f <- prediction(rf_p_oob.f, boot.dat$toast)
+  auc_rf_full[i] <- performance(rf_pr_oob.f, measure = "auc")@y.values[[1]]
+  
+  rf_p_oob.l <- predict(cause.rf.l, type="prob")[,2]
+  rf_pr_oob.l <- prediction(rf_p_oob.l, boot.dat$toast)
+  auc_rf_light[i] <- performance(rf_pr_oob.l, measure = "auc")@y.values[[1]] 
+  
+}
+
+mean_acc_rf.f <- mean(acc_rf_full)
+mean_acc_rf.l <- mean(acc_rf_light)
+mean_auc_rf.f <- mean(auc_rf_full)
+mean_auc_rf.l <- mean(auc_rf_light)
+CI_auc_rf_full <- quantile(auc_rf_full, c(0.025, 0.975))
+CI_auc_rf_light <- quantile(auc_rf_light, c(0.025, 0.975))
+
+
+``` 
+
+```{r, echo=F}
+# significance difference between auc? 
+library(coin)
+# assuming paired samples (computing two AUC values on same bootstrap train dataset)
+# check wheter distribution is the same regarding the variance of both samples
+var(auc_rf_light) / var(auc_rf_full) # Variance ratio = 0.8296934 -> assuming that distributions are more or less equal, yet shifted.
+
+# Mann-Whitney-U-test
+auc_df_rf <- data.frame(auc_full = auc_rf_full, auc_light = auc_rf_light)
+# H0: Median of Difference M >= 0, HA: M < 0
+alpha <- 0.05
+wilcoxsign_test(auc_df_rf$auc_full ~ auc_df_rf$auc_light, distribution="exact", conf.level = 1-alpha, alternative="greater")
+# p-value: 2.2e-16 << 0.05
+
+
+# DeLong's test
+qqnorm(auc_rf_full - auc_rf_light) # assume that difference is normally distributed
+V <- var(auc_rf_full-auc_rf_light)
+z <- mean(auc_rf_full-auc_rf_light) / sqrt(V)
+p_val_rf <- 2*(1-pnorm(abs(z))) # 0.00983481
+
+```
+
+
+```{r, echo=F}
+# Plot fitted probabilities, when fitted on contradiction data only:
+
+pred.rf.prob <- predict(cause.rf, type="prob")[,2] # newdata=dat[c(cAFF,ncAFT), ],
+pred.rf.class <- predict(cause.rf, type="response") #  newdata=dat[c(cAFF,ncAFT), ],
+plot_data_rf <- data.frame(True = dat[c(cAFF,ncAFT), ]$toast, Predicted = pred.rf.prob, predClass = pred.rf.class,
+                           atr = dat[c(cAFF,ncAFT), ]$atrial_fibrillation, antikoag = dat[c(cAFF,ncAFT), ]$antikoagulation_pre_stroke,
+                           smoker = dat[c(cAFF,ncAFT), ]$rf_smoker, hypertonia = dat[c(cAFF,ncAFT), ]$rf_hypertonia,
+                           tia_stroke = dat[c(cAFF,ncAFT), ]$rf_tia_stroke, lyse = dat[c(cAFF,ncAFT), ]$lyse, chd = dat[c(cAFF,ncAFT), ]$rf_chd)
+
+# Plot scatterplot
+set.seed(206)
+ggplot(plot_data_rf, aes(x = True, y = Predicted, color = predClass)) +
+  geom_point(size=4, position = position_jitter(width = 0.2, height = 0)) +
+  geom_abline(intercept = 0.5, slope = 0, linetype = "dashed", color = "red") +
+  geom_boxplot(aes(x = predClass, y = Predicted), alpha = 0.5, col = "black") +
+  scale_color_manual(values = c("blue", "red"), name = "pred Class") +
+  labs(y= "P(cardioembolic)", x = "True Class") +
+  theme(text = element_text(size=18), axis.text.x = element_text(angle=0, hjust=1))
+
+# Plot scatterplot
+set.seed(206)
+ggplot(plot_data_rf, aes(x = True, y = Predicted, color = atr)) +
+  geom_point(size=4, position = position_jitter(width = 0.2, height = 0)) +
+  geom_abline(intercept = 0.5, slope = 0, linetype = "dashed", color = "red") +
+  geom_boxplot(aes(x = predClass, y = Predicted), alpha = 0.5, col = "black") +
+  labs(y= "P(cardioembolic)", x = "True Class") +
+  theme(text = element_text(size=18), axis.text.x = element_text(angle=0, hjust=1)) +
+  scale_color_manual(values = c("magenta", "gold3"), name = "Atrial Fibrillation")
+
+
+# Plot scatterplot
+ggplot(plot_data_rf, aes(x = True, y = Predicted, color = antikoag)) +
+  geom_point(size=4, position = position_jitter(width = 0.2, height = 0)) +
+  geom_abline(intercept = 0.5, slope = 0, linetype = "dashed", color = "red") +
+  geom_boxplot(aes(x = predClass, y = Predicted), alpha = 0.5, col = "black") +
+  scale_color_manual(values = c("steelblue", "green4"), name = "antikoagulation") +
+  labs(y= "P(cardioembolic)", x = "True Class") +
+  theme(text = element_text(size=18), axis.text.x = element_text(angle=0, hjust=1))
+
+ggplot(plot_data_rf, aes(x = True, y = Predicted, color = smoker)) +
+  geom_point(size=4, position = position_jitter(width = 0.2, height = 0)) +
+  geom_abline(intercept = 0.5, slope = 0, linetype = "dashed", color = "red") +
+  geom_boxplot(aes(x = predClass, y = Predicted), alpha = 0.5, col = "black") +
+  scale_color_manual(values = c("steelblue", "green4"), name = "smoker") +
+  labs(y= "P(cardioembolic)", x = "True Class") +
+  theme(text = element_text(size=18), axis.text.x = element_text(angle=0, hjust=1))
+
+ggplot(plot_data_rf, aes(x = True, y = Predicted, color = hypertonia)) +
+  geom_point(size=4, position = position_jitter(width = 0.2, height = 0)) +
+  geom_abline(intercept = 0.5, slope = 0, linetype = "dashed", color = "red") +
+  geom_boxplot(aes(x = predClass, y = Predicted), alpha = 0.5, col = "black") +
+  scale_color_manual(values = c("steelblue", "green4"), name = "hypertonia") +
+  labs(y= "P(cardioembolic)", x = "True Class") +
+  theme(text = element_text(size=18), axis.text.x = element_text(angle=0, hjust=1))
+
+ggplot(plot_data_rf, aes(x = True, y = Predicted, color = tia_stroke)) +
+  geom_point(size=4, position = position_jitter(width = 0.2, height = 0)) +
+  geom_abline(intercept = 0.5, slope = 0, linetype = "dashed", color = "red") +
+  geom_boxplot(aes(x = predClass, y = Predicted), alpha = 0.5, col = "black") +
+  scale_color_manual(values = c("steelblue", "green4"), name = "tia_stroke") +
+  labs(y= "P(cardioembolic)", x = "True Class") +
+  theme(text = element_text(size=18), axis.text.x = element_text(angle=0, hjust=1))
+
+ggplot(plot_data_rf, aes(x = True, y = Predicted, color = lyse)) +
+  geom_point(size=4, position = position_jitter(width = 0.2, height = 0)) +
+  geom_abline(intercept = 0.5, slope = 0, linetype = "dashed", color = "red") +
+  geom_boxplot(aes(x = predClass, y = Predicted), alpha = 0.5, col = "black") +
+  scale_color_manual(values = c("steelblue", "green4"), name = "lyse") +
+  labs(y= "P(cardioembolic)", x = "True Class") +
+  theme(text = element_text(size=18), axis.text.x = element_text(angle=0, hjust=1))
+
+ggplot(plot_data_rf, aes(x = True, y = Predicted, color = chd)) +
+  geom_point(size=4, position = position_jitter(width = 0.2, height = 0)) +
+  geom_abline(intercept = 0.5, slope = 0, linetype = "dashed", color = "red") +
+  geom_boxplot(aes(x = predClass, y = Predicted), alpha = 0.5, col = "black") +
+  scale_color_manual(values = c("steelblue", "green4"), name = "chd") +
+  labs(y= "P(cardioembolic)", x = "True Class") +
+  theme(text = element_text(size=18), axis.text.x = element_text(angle=0, hjust=1))
+
+
+
+```
+
+```{r, echo=F}
+# plot fitted probabilities, when fitted on all data:
+
+pred.rf.prob <- predict(cause.rf, type="prob")[,2]
+pred.rf.class <- predict(cause.rf, type="response") 
+plot_data_rf <- data.frame(True = dat$toast, Predicted = pred.rf.prob, predClass = pred.rf.class,
+                           atr = dat$atrial_fibrillation, antikoag = dat$antikoagulation_pre_stroke,
+                           smoker = dat$rf_smoker, hypertonia = dat$rf_hypertonia,
+                           tia_stroke = dat$rf_tia_stroke, lyse = dat$lyse, chd = dat$rf_chd)
+
+# Plot scatterplot
+set.seed(206)
+ggplot(plot_data_rf, aes(x = True, y = Predicted, color = predClass)) +
+  geom_point(size=4, position = position_jitter(width = 0.2, height = 0)) +
+  geom_abline(intercept = 0.5, slope = 0, linetype = "dashed", color = "red") +
+  geom_boxplot(aes(x = predClass, y = Predicted), alpha = 0.5, col = "black") +
+  scale_color_manual(values = c("blue", "red"), name = "pred Class") +
+  labs(y= "P(cardioembolic)", x = "True Class") +
+  theme(text = element_text(size=18), axis.text.x = element_text(angle=0, hjust=1))
+
+# Plot scatterplot
+set.seed(206)
+ggplot(plot_data_rf, aes(x = True, y = Predicted, color = atr)) +
+  geom_point(size=4, position = position_jitter(width = 0.2, height = 0)) +
+  geom_abline(intercept = 0.5, slope = 0, linetype = "dashed", color = "red") +
+  geom_boxplot(aes(x = predClass, y = Predicted), alpha = 0.5, col = "black") +
+  labs(y= "P(cardioembolic)", x = "True Class") +
+  theme(text = element_text(size=18), axis.text.x = element_text(angle=0, hjust=1)) +
+  scale_color_manual(values = c("magenta", "gold3"), name = "Atrial Fibrillation")
+
+
+# Plot scatterplot
+ggplot(plot_data_rf, aes(x = True, y = Predicted, color = antikoag)) +
+  geom_point(size=4, position = position_jitter(width = 0.2, height = 0)) +
+  geom_abline(intercept = 0.5, slope = 0, linetype = "dashed", color = "red") +
+  geom_boxplot(aes(x = predClass, y = Predicted), alpha = 0.5, col = "black") +
+  scale_color_manual(values = c("steelblue", "green4"), name = "antikoagulation") +
+  labs(y= "P(cardioembolic)", x = "True Class") +
+  theme(text = element_text(size=18), axis.text.x = element_text(angle=0, hjust=1))
+
+ggplot(plot_data_rf, aes(x = True, y = Predicted, color = smoker)) +
+  geom_point(size=4, position = position_jitter(width = 0.2, height = 0)) +
+  geom_abline(intercept = 0.5, slope = 0, linetype = "dashed", color = "red") +
+  geom_boxplot(aes(x = predClass, y = Predicted), alpha = 0.5, col = "black") +
+  scale_color_manual(values = c("steelblue", "green4"), name = "smoker") +
+  labs(y= "P(cardioembolic)", x = "True Class") +
+  theme(text = element_text(size=18), axis.text.x = element_text(angle=0, hjust=1))
+
+ggplot(plot_data_rf, aes(x = True, y = Predicted, color = hypertonia)) +
+  geom_point(size=4, position = position_jitter(width = 0.2, height = 0)) +
+  geom_abline(intercept = 0.5, slope = 0, linetype = "dashed", color = "red") +
+  geom_boxplot(aes(x = predClass, y = Predicted), alpha = 0.5, col = "black") +
+  scale_color_manual(values = c("steelblue", "green4"), name = "hypertonia") +
+  labs(y= "P(cardioembolic)", x = "True Class") +
+  theme(text = element_text(size=18), axis.text.x = element_text(angle=0, hjust=1))
+
+ggplot(plot_data_rf, aes(x = True, y = Predicted, color = tia_stroke)) +
+  geom_point(size=4, position = position_jitter(width = 0.2, height = 0)) +
+  geom_abline(intercept = 0.5, slope = 0, linetype = "dashed", color = "red") +
+  geom_boxplot(aes(x = predClass, y = Predicted), alpha = 0.5, col = "black") +
+  scale_color_manual(values = c("steelblue", "green4"), name = "tia_stroke") +
+  labs(y= "P(cardioembolic)", x = "True Class") +
+  theme(text = element_text(size=18), axis.text.x = element_text(angle=0, hjust=1))
+
+ggplot(plot_data_rf, aes(x = True, y = Predicted, color = lyse)) +
+  geom_point(size=4, position = position_jitter(width = 0.2, height = 0)) +
+  geom_abline(intercept = 0.5, slope = 0, linetype = "dashed", color = "red") +
+  geom_boxplot(aes(x = predClass, y = Predicted), alpha = 0.5, col = "black") +
+  scale_color_manual(values = c("steelblue", "green4"), name = "lyse") +
+  labs(y= "P(cardioembolic)", x = "True Class") +
+  theme(text = element_text(size=18), axis.text.x = element_text(angle=0, hjust=1))
+
+ggplot(plot_data_rf, aes(x = True, y = Predicted, color = chd)) +
+  geom_point(size=4, position = position_jitter(width = 0.2, height = 0)) +
+  geom_abline(intercept = 0.5, slope = 0, linetype = "dashed", color = "red") +
+  geom_boxplot(aes(x = predClass, y = Predicted), alpha = 0.5, col = "black") +
+  scale_color_manual(values = c("steelblue", "green4"), name = "chd") +
+  labs(y= "P(cardioembolic)", x = "True Class") +
+  theme(text = element_text(size=18), axis.text.x = element_text(angle=0, hjust=1))
+
+
+
+```
+
+
+```{r, echo=F}
+# Simple Dependency plots - logit scale
+par(mfrow=c(1,1))
+partialPlot(cause.rf,
+            pred.data=dat[union(c(1,2,6,15,17,18,23,36),cols_stroke_outcome)],
+            x.var = "time_to_groin_puncture",
+            which.class = 1,
+            ylab="predicted cause (logit)")
+partialPlot(cause.rf,
+            pred.data=dat[union(c(1,2,6,15,17,18,23,36),cols_stroke_outcome)],
+            x.var = "age",
+            which.class = 1,
+            ylab="predicted cause (logit)")
+partialPlot(cause.rf,
+            pred.data=dat[union(c(1,2,6,15,17,18,23,36),cols_stroke_outcome)],
+            x.var = "nihss_bl",
+            which.class = 1,
+            ylab="predicted cause (logit)")
+partialPlot(cause.rf,
+            pred.data=dat[union(c(1,2,6,15,17,18,23,36),cols_stroke_outcome)],
+            x.var = "sys_bloodpressure_bl",
+            which.class = 1,
+            ylab="predicted cause (logit)")
+partialPlot(cause.rf,
+            pred.data=dat[union(c(1,2,6,15,17,18,23,36),cols_stroke_outcome)],
+            x.var = "inr",
+            which.class = 1,
+            ylab="predicted cause (logit)")
+partialPlot(cause.rf,
+            pred.data=dat[union(c(1,2,6,15,17,18,23,36),cols_stroke_outcome)],
+            x.var = "triglyceride",
+            which.class = 1,
+            ylab="predicted cause (logit)")
+
+partialPlot(cause.rf,
+            pred.data=dat[union(c(1,2,6,15,17,18,23,36),cols_stroke_outcome)],
+            x.var = "sex",
+            which.class = 1,
+            ylab="predicted cause (logit)")
+partialPlot(cause.rf,
+            pred.data=dat[union(c(1,2,6,15,17,18,23,36),cols_stroke_outcome)],
+            x.var = "atrial_fibrillation",
+            which.class = 1,
+            ylab="predicted cause (logit)")
+partialPlot(cause.rf,
+            pred.data=dat[union(c(1,2,6,15,17,18,23,36),cols_stroke_outcome)],
+            x.var = "antikoagulation_pre_stroke",
+            which.class = 1,
+            ylab="predicted cause (logit)")
+partialPlot(cause.rf,
+            pred.data=dat[union(c(1,2,6,15,17,18,23,36),cols_stroke_outcome)],
+            x.var = "lyse",
+            which.class = 1,
+            ylab="predicted cause (logit)")
+
+partialPlot(cause.rf,
+            pred.data=dat[union(c(1,2,6,15,17,18,23,36),cols_stroke_outcome)],
+            x.var = "rf_chd",
+            which.class = 1,
+            ylab="predicted cause (logit)")
+
+```
+
+```{r, echo=F}
+# Advanced Dependency Plots - Probability scale
+
+# time to groin puncture
+ran <- range(dat$time_to_groin_puncture)
+steps <- seq(ran[1], ran[2], 0.1)
+N <- dim(dat)[1]
+preds <- matrix(NA, nrow=N, ncol=length(steps))
+for(i in 1:N){
+  df <- dat[i,]
+  for(ll in 2:length(steps)) df <- rbind(df, dat[i,])
+  df$time_to_groin_puncture <- steps
+  df$toast <- NULL
+  preds[i,] = predict(cause.rf, newdata = df, type="prob")[,2]
+}
+
+plot(NULL, xlim=c(-1,3), ylim=c(0,1), xlab="time_to_groin_puncture", ylab="P(cardioembolic)", las=T, cex.axis = 1.5, cex.lab = 1.5, main = "Random Forest")
+for(i in 1:N){
+  contr <- ifelse(dat[i,]$contradiction == 0, F, T)
+  obs_col <- ifelse(contr, "grey", ifelse(dat[i,]$toast == 0, "blue", "red"))
+  lines(steps, preds[i,], col = obs_col)
+  segments(dat$time_to_groin_puncture[i], 0, dat$time_to_groin_puncture[i], 0.03)
+  points(dat$time_to_groin_puncture[i], y = predict(cause.rf, newdata = dat[i,], type="prob")[,2], type = "p", pch = 16, cex = 0.6)
+}
+lines(steps, colMeans(preds), col="red4", lwd=3)
+legend("topright", inset=c(0,0), legend=c("0","1"), lty=c(1,1), lwd = 2, col=c("blue", "red"), title="True cause")
+
+
+
+# age
+ran <- range(dat$age)
+steps <- seq(ran[1], ran[2], 0.1)
+N <- dim(dat)[1]
+preds <- matrix(NA, nrow=N, ncol=length(steps))
+for(i in 1:N){
+  df <- dat[i,]
+  for(ll in 2:length(steps)) df <- rbind(df, dat[i,])
+  df$age <- steps
+  df$toast <- NULL
+  preds[i,] = predict(cause.rf, newdata = df, type="prob")[,2]
+}
+
+plot(NULL, xlim=c(-2,2), ylim=c(0,1), xlab="age", ylab="P(cardioembolic)", las=T, cex.axis = 1.5, cex.lab = 1.5, main = "Random Forest")
+for(i in 1:N){
+  contr <- ifelse(dat[i,]$contradiction == 0, F, T)
+  obs_col <- ifelse(contr, "grey", ifelse(dat[i,]$toast == 0, "blue", "red"))
+  lines(steps, preds[i,], col = obs_col)
+  segments(dat$age[i], 0, dat$age[i], 0.03)
+  points(dat$age[i], y = predict(cause.rf, newdata = dat[i,], type="prob")[,2], type = "p", pch = 16, cex = 0.6)
+}
+lines(steps, colMeans(preds), col="red4", lwd=3)
+legend("topright", inset=c(0,0), legend=c("0","1"), lty=c(1,1), lwd = 2, col=c("blue", "red"), title="True cause")
+
+
+# nihss_bl
+ran <- range(dat$nihss_bl)
+steps <- seq(ran[1], ran[2], 0.1)
+N <- dim(dat)[1]
+preds <- matrix(NA, nrow=N, ncol=length(steps))
+for(i in 1:N){
+  df <- dat[i,]
+  for(ll in 2:length(steps)) df <- rbind(df, dat[i,])
+  df$nihss_bl <- steps
+  df$toast <- NULL
+  preds[i,] = predict(cause.rf, newdata = df, type="prob")[,2]
+}
+
+plot(NULL, xlim=c(-2,2), ylim=c(0,1), xlab="nihss_bl", ylab="P(cardioembolic)", las=T, cex.axis = 1.5, cex.lab = 1.5, main = "Random Forest")
+for(i in 1:N){
+  contr <- ifelse(dat[i,]$contradiction == 0, F, T)
+  obs_col <- ifelse(contr, "grey", ifelse(dat[i,]$toast == 0, "blue", "red"))
+  lines(steps, preds[i,], col = obs_col)
+  segments(dat$nihss_bl[i], 0, dat$nihss_bl[i], 0.03)
+  points(dat$nihss_bl[i], y = predict(cause.rf, newdata = dat[i,], type="prob")[,2], type = "p", pch = 16, cex = 0.6)
+}
+lines(steps, colMeans(preds), col="red4", lwd=3)
+legend("topright", inset=c(0,0), legend=c("0","1"), lty=c(1,1), lwd = 2, col=c("blue", "red"), title="True cause")
+
+
+# sys_bloodpressure_bl
+ran <- range(dat$sys_bloodpressure_bl)
+steps <- seq(ran[1], ran[2], 0.1)
+N <- dim(dat)[1]
+preds <- matrix(NA, nrow=N, ncol=length(steps))
+for(i in 1:N){
+  df <- dat[i,]
+  for(ll in 2:length(steps)) df <- rbind(df, dat[i,])
+  df$sys_bloodpressure_bl <- steps
+  df$toast <- NULL
+  preds[i,] = predict(cause.rf, newdata = df, type="prob")[,2]
+}
+
+plot(NULL, xlim=c(-2,3), ylim=c(0,1), xlab="sys_bloodpressure_bl", ylab="P(cardioembolic)", las=T, cex.axis = 1.5, cex.lab = 1.5, main = "Random Forest")
+for(i in 1:N){
+  contr <- ifelse(dat[i,]$contradiction == 0, F, T)
+  obs_col <- ifelse(contr, "grey", ifelse(dat[i,]$toast == 0, "blue", "red"))
+  lines(steps, preds[i,], col = obs_col)
+  segments(dat$sys_bloodpressure_bl[i], 0, dat$sys_bloodpressure_bl[i], 0.03)
+  points(dat$sys_bloodpressure_bl[i], y = predict(cause.rf, newdata = dat[i,], type="prob")[,2], type = "p", pch = 16, cex = 0.6)
+}
+lines(steps, colMeans(preds), col="red4", lwd=3)
+legend("topright", inset=c(0,0), legend=c("0","1"), lty=c(1,1), lwd = 2, col=c("blue", "red"), title="True cause")
+
+# inr
+ran <- range(dat$inr)
+steps <- seq(ran[1], ran[2], 0.1)
+N <- dim(dat)[1]
+preds <- matrix(NA, nrow=N, ncol=length(steps))
+for(i in 1:N){
+  df <- dat[i,]
+  for(ll in 2:length(steps)) df <- rbind(df, dat[i,])
+  df$inr <- steps
+  df$toast <- NULL
+  preds[i,] = predict(cause.rf, newdata = df, type="prob")[,2]
+}
+
+plot(NULL, xlim=c(-1,5), ylim=c(0,1), xlab="inr", ylab="P(cardioembolic)", las=T, cex.axis = 1.5, cex.lab = 1.5, main = "Random Forest")
+for(i in 1:N){
+  contr <- ifelse(dat[i,]$contradiction == 0, F, T)
+  obs_col <- ifelse(contr, "grey", ifelse(dat[i,]$toast == 0, "blue", "red"))
+  lines(steps, preds[i,], col = obs_col)
+  segments(dat$inr[i], 0, dat$inr[i], 0.03)
+  points(dat$inr[i], y = predict(cause.rf, newdata = dat[i,], type="prob")[,2], type = "p", pch = 16, cex = 0.6)
+}
+lines(steps, colMeans(preds), col="red4", lwd=3)
+legend("topright", inset=c(0,0), legend=c("0","1"), lty=c(1,1), lwd = 2, col=c("blue", "red"), title="True cause")
+
+# triglyceride
+ran <- range(dat$triglyceride)
+steps <- seq(ran[1], ran[2], 0.1)
+N <- dim(dat)[1]
+preds <- matrix(NA, nrow=N, ncol=length(steps))
+for(i in 1:N){
+  df <- dat[i,]
+  for(ll in 2:length(steps)) df <- rbind(df, dat[i,])
+  df$triglyceride <- steps
+  df$toast <- NULL
+  preds[i,] = predict(cause.rf, newdata = df, type="prob")[,2]
+}
+
+plot(NULL, xlim=c(-2,4), ylim=c(0,1), xlab="triglyceride", ylab="P(cardioembolic)", las=T, cex.axis = 1.5, cex.lab = 1.5, main = "Random Forest")
+for(i in 1:N){
+  contr <- ifelse(dat[i,]$contradiction == 0, F, T)
+  obs_col <- ifelse(contr, "grey", ifelse(dat[i,]$toast == 0, "blue", "red"))
+  lines(steps, preds[i,], col = obs_col)
+  segments(dat$triglyceride[i], 0, dat$triglyceride[i], 0.03)
+  points(dat$triglyceride[i], y = predict(cause.rf, newdata = dat[i,], type="prob")[,2], type = "p", pch = 16, cex = 0.6)
+}
+lines(steps, colMeans(preds), col="red4", lwd=3)
+legend("topright", inset=c(0,0), legend=c("0","1"), lty=c(1,1), lwd = 2, col=c("blue", "red"), title="True cause")
+```
+```{r, echo=F}
+# Dependency Plots - log odds 
+
+# time to groin puncture
+ran <- range(dat$time_to_groin_puncture)
+steps <- seq(ran[1], ran[2], length.out=45)
+N <- dim(dat)[1]
+preds <- matrix(NA, nrow=N, ncol=length(steps))
+epsilon <- 1e-16
+for(i in 1:N){
+  df <- dat[i,]
+  for(ll in 2:length(steps)) df <- rbind(df, dat[i,])
+  df$time_to_groin_puncture <- steps
+  df$toast <- NULL
+  preds[i,] = log((predict(cause.rf, newdata = df, type="prob")[,2]+epsilon)/ (1-predict(cause.rf, newdata = df, type="prob")[,2]+epsilon)) 
+}
+
+plot(NULL, xlim=c(-1,3), ylim=c(-6,6), xlab="time_to_groin_puncture", ylab="log odds", las=T, cex.axis = 1.5, cex.lab = 1.5, main = "Random Forest")
+for(i in 1:N){
+  contr <- ifelse(dat[i,]$contradiction == 0, F, T)
+  obs_col <- ifelse(contr, "grey", ifelse(dat[i,]$toast == 0, "blue", "red"))
+  lines(steps, preds[i,], col = obs_col)
+  segments(dat$time_to_groin_puncture[i], -6, dat$time_to_groin_puncture[i], -5.5)
+  points(dat$time_to_groin_puncture[i], y = log((predict(cause.rf, newdata = dat[i,], type="prob")[,2]+epsilon)/ (1-predict(cause.rf, newdata = dat[i,], type="prob")[,2]+epsilon)),
+         type = "p", pch = 16, cex = 0.6)
+}
+lines(steps, colMeans(preds), col="red4", lwd=3)
+legend("topright", inset=c(0,0), legend=c("0","1"), lty=c(1,1), lwd = 2, col=c("blue", "red"), title="True cause")
+
+
+# age
+ran <- range(dat$age)
+steps <- seq(ran[1], ran[2], length.out=45)
+N <- dim(dat)[1]
+preds <- matrix(NA, nrow=N, ncol=length(steps))
+epsilon <- 1e-16
+for(i in 1:N){
+  df <- dat[i,]
+  for(ll in 2:length(steps)) df <- rbind(df, dat[i,])
+  df$age<- steps
+  df$toast <- NULL
+  preds[i,] = log((predict(cause.rf, newdata = df, type="prob")[,2]+epsilon)/ (1-predict(cause.rf, newdata = df, type="prob")[,2]+epsilon)) 
+}
+
+plot(NULL, xlim=ran, ylim=c(-5,5), xlab="age", ylab="log odds", las=T, cex.axis = 1.5, cex.lab = 1.5, main = "Random Forest")
+for(i in 1:N){
+  contr <- ifelse(dat[i,]$contradiction == 0, F, T)
+  obs_col <- ifelse(contr, "grey", ifelse(dat[i,]$toast == 0, "blue", "red"))
+  lines(steps, preds[i,], col = obs_col)
+  segments(dat$age[i], -5, dat$age[i], -4.6)
+  points(dat$age[i], y = log((predict(cause.rf, newdata = dat[i,], type="prob")[,2]+epsilon)/ (1-predict(cause.rf, newdata = dat[i,], type="prob")[,2]+epsilon)),
+         type = "p", pch = 16, cex = 0.6)
+}
+lines(steps, colMeans(preds), col="red4", lwd=3)
+legend("topright", inset=c(0,0), legend=c("0","1"), lty=c(1,1), lwd = 2, col=c("blue", "red"), title="True cause")
+
+
+# nihss_bl
+ran <- range(dat$nihss_bl)
+steps <- seq(ran[1], ran[2], length.out=45)
+N <- dim(dat)[1]
+preds <- matrix(NA, nrow=N, ncol=length(steps))
+epsilon <- 1e-16
+for(i in 1:N){
+  df <- dat[i,]
+  for(ll in 2:length(steps)) df <- rbind(df, dat[i,])
+  df$nihss_bl<- steps
+  df$toast <- NULL
+  preds[i,] = log((predict(cause.rf, newdata = df, type="prob")[,2]+epsilon)/ (1-predict(cause.rf, newdata = df, type="prob")[,2]+epsilon)) 
+}
+
+plot(NULL, xlim=ran, ylim=c(-5,5), xlab="nihss_bl", ylab="log odds", las=T, cex.axis = 1.5, cex.lab = 1.5, main = "Random Forest")
+for(i in 1:N){
+  contr <- ifelse(dat[i,]$contradiction == 0, F, T)
+  obs_col <- ifelse(contr, "grey", ifelse(dat[i,]$toast == 0, "blue", "red"))
+  lines(steps, preds[i,], col = obs_col)
+  segments(dat$nihss_bl[i], -5, dat$nihss_bl[i], -4.6)
+  points(dat$nihss_bl[i], y = log((predict(cause.rf, newdata = dat[i,], type="prob")[,2]+epsilon)/ (1-predict(cause.rf, newdata = dat[i,], type="prob")[,2]+epsilon)),
+         type = "p", pch = 16, cex = 0.6)
+}
+lines(steps, colMeans(preds), col="red4", lwd=3)
+legend("topright", inset=c(0,0), legend=c("0","1"), lty=c(1,1), lwd = 2, col=c("blue", "red"), title="True cause")
+
+
+# sys_bloodpressure_bl
+ran <- range(dat$sys_bloodpressure_bl)
+steps <- seq(ran[1], ran[2], length.out=45)
+N <- dim(dat)[1]
+preds <- matrix(NA, nrow=N, ncol=length(steps))
+epsilon <- 1e-16
+for(i in 1:N){
+  df <- dat[i,]
+  for(ll in 2:length(steps)) df <- rbind(df, dat[i,])
+  df$sys_bloodpressure_bl<- steps
+  df$toast <- NULL
+  preds[i,] = log((predict(cause.rf, newdata = df, type="prob")[,2]+epsilon)/ (1-predict(cause.rf, newdata = df, type="prob")[,2]+epsilon)) 
+}
+
+plot(NULL, xlim=ran, ylim=c(-5,5), xlab="sys_bloodpressure_bl", ylab="log odds", las=T, cex.axis = 1.5, cex.lab = 1.5, main = "Random Forest")
+for(i in 1:N){
+  contr <- ifelse(dat[i,]$contradiction == 0, F, T)
+  obs_col <- ifelse(contr, "grey", ifelse(dat[i,]$toast == 0, "blue", "red"))
+  lines(steps, preds[i,], col = obs_col)
+  segments(dat$sys_bloodpressure_bl[i], -5, dat$sys_bloodpressure_bl[i], -4.6)
+  points(dat$sys_bloodpressure_bl[i], y = log((predict(cause.rf, newdata = dat[i,], type="prob")[,2]+epsilon)/ (1-predict(cause.rf, newdata = dat[i,], type="prob")[,2]+epsilon)),
+         type = "p", pch = 16, cex = 0.6)
+}
+lines(steps, colMeans(preds), col="red4", lwd=3)
+legend("topright", inset=c(0,0), legend=c("0","1"), lty=c(1,1), lwd = 2, col=c("blue", "red"), title="True cause")
+
+# inr
+ran <- range(dat$inr)
+steps <- seq(ran[1], ran[2], length.out=45)
+N <- dim(dat)[1]
+preds <- matrix(NA, nrow=N, ncol=length(steps))
+epsilon <- 1e-16
+for(i in 1:N){
+  df <- dat[i,]
+  for(ll in 2:length(steps)) df <- rbind(df, dat[i,])
+  df$inr<- steps
+  df$toast <- NULL
+  preds[i,] = log((predict(cause.rf, newdata = df, type="prob")[,2]+epsilon)/ (1-predict(cause.rf, newdata = df, type="prob")[,2]+epsilon)) 
+}
+
+plot(NULL, xlim=c(-0.6,4), ylim=c(-5,5), xlab="inr", ylab="log odds", las=T, cex.axis = 1.5, cex.lab = 1.5, main = "Random Forest")
+for(i in 1:N){
+  contr <- ifelse(dat[i,]$contradiction == 0, F, T)
+  obs_col <- ifelse(contr, "grey", ifelse(dat[i,]$toast == 0, "blue", "red"))
+  lines(steps, preds[i,], col = obs_col)
+  segments(dat$inr[i], -5, dat$inr[i], -4.6)
+  points(dat$inr[i], y = log((predict(cause.rf, newdata = dat[i,], type="prob")[,2]+epsilon)/ (1-predict(cause.rf, newdata = dat[i,], type="prob")[,2]+epsilon)),
+         type = "p", pch = 16, cex = 0.6)
+}
+lines(steps, colMeans(preds), col="red4", lwd=3)
+legend("topright", inset=c(0,0), legend=c("0","1"), lty=c(1,1), lwd = 2, col=c("blue", "red"), title="True cause")
+
+# triglyceride
+# time to groin puncture
+ran <- range(dat$triglyceride)
+steps <- seq(ran[1], ran[2], length.out=45)
+N <- dim(dat)[1]
+preds <- matrix(NA, nrow=N, ncol=length(steps))
+epsilon <- 1e-16
+for(i in 1:N){
+  df <- dat[i,]
+  for(ll in 2:length(steps)) df <- rbind(df, dat[i,])
+  df$triglyceride<- steps
+  df$toast <- NULL
+  preds[i,] = log((predict(cause.rf, newdata = df, type="prob")[,2]+epsilon)/ (1-predict(cause.rf, newdata = df, type="prob")[,2]+epsilon)) 
+}
+
+plot(NULL, xlim=c(-1.5,4), ylim=c(-5,5), xlab="triglyceride", ylab="log odds", las=T, cex.axis = 1.5, cex.lab = 1.5, main = "Random Forest")
+for(i in 1:N){
+  contr <- ifelse(dat[i,]$contradiction == 0, F, T)
+  obs_col <- ifelse(contr, "grey", ifelse(dat[i,]$toast == 0, "blue", "red"))
+  lines(steps, preds[i,], col = obs_col)
+  segments(dat$triglyceride[i], -5, dat$triglyceride[i], -4.6)
+  points(dat$triglyceride[i], y = log((predict(cause.rf, newdata = dat[i,], type="prob")[,2]+epsilon)/ (1-predict(cause.rf, newdata = dat[i,], type="prob")[,2]+epsilon)),
+         type = "p", pch = 16, cex = 0.6)
+}
+lines(steps, colMeans(preds), col="red4", lwd=3)
+legend("topright", inset=c(0,0), legend=c("0","1"), lty=c(1,1), lwd = 2, col=c("blue", "red"), title="True cause")
+```
+
+
+## Lasso - Variable Selection
+
+```{r, echo=F}
+library(glmnet)
+
+N <- 100
+
+lasso.coef.list <- list()
+betas <- data.frame(matrix(nrow = N, ncol = 35))
+colnames(betas) <- 1:35
+
+set.seed(206)
+
+for(i in 1:N){
+  
+  # Bootstrap of Training data:
+  boot.indices <- sample(1:dim(dat_train)[1], replace=T)
+  boot.dat_train <- dat_train[boot.indices, ]
+  
+  Y <- boot.dat_train$toast
+  X <- data.matrix(boot.dat_train[,-c(35:36)])
+  cv.model <- cv.glmnet(x = X , y = Y, alpha=1, family="binomial", standardize=F)
+  best.lambda <- cv.model$lambda.min
+  
+  lasso.fit <- glmnet(x = X , y = Y, alpha=1, family="binomial", lambda=best.lambda, standardize=F) # fit Lasso model
+  betas[i,] <- coef(lasso.fit)[1:35]
+  
+  non_zero_coef_indices <- which(coef(lasso.fit) != 0)
+  lasso.features <- rownames(coef(lasso.fit))[non_zero_coef_indices]
+  
+  lasso.coef.list[[i]] <- non_zero_coef_indices
+}
+
+
+all_indices <- unlist(lasso.coef.list) # flatten the list of the relevant features (100 bootstrap indice vectors)
+feature.freq <- table(all_indices)/100 # compute the frequency of the features (that is, their indices)
+lasso.boot.feature.indices <- as.numeric(names(which(feature.freq >= 0.8))) # filter out features with a frequency less than 0.8
+lasso.boot.features <- rownames(coef(lasso.fit))[lasso.boot.feature.indices] # feature names
+
+boot.conf_int <- function(x){
+  quants <- quantile(x, probs=c(0.025, 0.975))
+  x_strich <- mean(x)
+  
+  return(c(x_strich, quants))
+}
+
+CI.betas <- as.data.frame(apply(betas, 2, FUN=boot.conf_int))
+rownames(CI.betas) <- c("x_strich", "lower", "upper")
+CI.betas_rel <- CI.betas[, lasso.boot.feature.indices]
+
+
+
+
+```
+
+```{r, echo=F}
+# Plot confidence interval of bootstrap estimated Lasso coefficients
+library(ggplot2)
+library(data.table)
+
+#transpose data frame
+CI.betas_t <- transpose(CI.betas_rel)
+
+#redefine row and column names
+rownames(CI.betas_t) <- colnames(CI.betas_rel)
+colnames(CI.betas_t) <- rownames(CI.betas_rel)
+CI.betas_t$name <- rownames(coef(lasso.fit))[lasso.boot.feature.indices]
+
+
+library(dplyr)
+CI.betas_t <- CI.betas_t %>%
+  arrange(x_strich)
+
+par(mar=c(5,15,2,1), cex=1)
+plot(1, 1, type = "n", xlab = expression(hat(beta)), ylab = "", xlim = range(c(CI.betas_t$lower, CI.betas_t$upper)), ylim = c(0.5, nrow(CI.betas_t) + 0.5), yaxt = "n", main="Selected Features")
+legend("topleft", legend = "95% CI", lty = 1, pch = 15, pt.cex = 0.5, cex = 0.9, bty="n", seg.len = 0.3, x.intersp = 0.1)
+
+# Adding error bars
+segments(CI.betas_t$lower, seq_along(CI.betas_t$x_strich), CI.betas_t$upper, seq_along(CI.betas_t$x_strich), lwd = 2)
+
+# Adding vertical bars at both ends of the interval
+segments(CI.betas_t$lower, seq_along(CI.betas_t$x_strich) - 0.2, CI.betas_t$lower, seq_along(CI.betas_t$x_strich) + 0.2, lwd = 2)
+segments(CI.betas_t$upper, seq_along(CI.betas_t$x_strich) - 0.2, CI.betas_t$upper, seq_along(CI.betas_t$x_strich) + 0.2, lwd = 2)
+
+# Adding points
+points(CI.betas_t$x_strich, seq_along(CI.betas_t$x_strich), pch = 16)
+
+# Adding y-axis labels
+axis(2, at = seq_along(CI.betas_t$x_strich), labels = CI.betas_t$name, las = 1, cex.axis = 1.2)
+
+# Adding a grid
+abline(v = seq(-20, 15, by = 5), col = "gray", lty = 2)
+abline(v = 0, col = "red2", lty = 2)
+```
+
+# Variable Selection with Stability paths
+
+```{r, echo=F}
+library(glmnet)
+
+N <- 100
+
+
+lambdas <- seq(0.5, 4.1e-05, length.out=90)
+p <- dim(dat_train)[2]
+freq_df <- data.frame(matrix(nrow=length(lambdas), ncol=p))
+colnames(freq_df) <- c("lambda", 1:(p-1))
+ind_list <- list()
+var_name_list <- list()
+
+set.seed(206)
+
+for(l in 1:length(lambdas)){
+  
+  lasso.coef.list <- list()
+  betas <- data.frame(matrix(nrow = N, ncol = p-1))
+  colnames(betas) <- 1:(p-1)
+  
+  for(i in 1:N){
+    
+    # Bootstrap of Training data:
+    boot.indices <- sample(1:dim(dat_train)[1], replace=T)
+    boot.dat_train <- dat_train[boot.indices, ]
+    
+    Y <- boot.dat_train$toast
+    X <- data.matrix(boot.dat_train[,-c(35:36)])
+    
+    lasso.fit <- glmnet(x = X , y = Y, alpha=1, family="binomial", lambda=lambdas[l], standardize=F) # fit Lasso model
+    betas[i,] <- coef(lasso.fit)[1:(p-1)]
+    
+    non_zero_coef_indices <- which(coef(lasso.fit) != 0)
+    lasso.features <- rownames(coef(lasso.fit))[non_zero_coef_indices]
+    
+    lasso.coef.list[[i]] <- non_zero_coef_indices
+  }
+  
+  freq_vec <- rep(NA, p-1)
+  all_indices <- unlist(lasso.coef.list) # flatten the list of the relevant features (100 bootstrap indice vectors)
+  feature.freq <- table(all_indices)/100 # compute the frequency of the features (that is, their indices)
+  ind.list <- as.numeric(names(table(all_indices)))
+  for(ind in 1:(p-1)){ifelse(is.element(ind, ind.list), freq_vec[ind] <- feature.freq[toString(ind)], freq_vec[ind] <- 0)}
+  freq_df[l,] <- c(lambdas[l], freq_vec)
+  ind_list[[l]] <- as.numeric(names(which(as.numeric(feature.freq) >= 0.8))) # filter out features with a frequency less than 0.8
+  var_name_list[[l]] <- rownames(coef(lasso.fit))[ind.list] # feature names
+    
+}
+```
+
+```{r, echo=F}
+par(mfrow=c(1,1), cex = 1)
+plot(log(lambdas), freq_df[,2], col="white", lwd=2, type="l", ylim=c(0,1), xlim=log(c(0.5, 4.1e-05)),
+     xlab=expression(log(lambda)), ylab = expression(Pi), main="Stability Path")
+for(i in 3:p){
+  col <- ifelse(is.element(i-1, lasso.boot.feature.indices), "red", "black")
+  lines(log(lambdas), freq_df[,i], col=col, lty=ifelse(col=="red", 1, 2), lwd=2)
+}
+abline(v=log(best.lambda))
+
+```
+
+
+
+
+## Logistic Regression (with features selected in the simulations above)
+
+```{r, echo=F, include=F, warning=F}
+library(caret)
+```
+
+```{r, echo=F, warning=F}
+library(ROCR)
+library(ISLR)
+
+set.seed(206)
+cause.logit <- glm(toast ~ ., data = dat_train[c(1, 18, 30, 34, 36)], family=binomial)
+summary(cause.logit)
+pred.logit.prob <- predict(cause.logit, newdata = dat_test, type = "response")
+pred.logit1 <- as.factor(ifelse(pred.logit.prob >= 0.5, 1, 0))
+pred.logit <- predict(cause.logit, newdata = dat_test)
+pred.logit2 <- prediction(pred.logit, dat_test$toast)
+confusionMatrix(data=pred.logit1, reference = dat_test$toast)
+
+
+plot(performance(pred.logit2, "tpr", "fpr"))
+text(0.6, 0.6, paste("AUC = ", performance(pred.logit2, "auc")@y.values[1]))
+
+
+set.seed(206)
+cause.logit <- glm(toast ~ ., data = dat_train[c(1, 6, 33, 32, 36)], family=binomial)
+summary(cause.logit)
+pred.logit.prob <- predict(cause.logit, newdata = dat_test, type = "response")
+pred.logit1 <- as.factor(ifelse(pred.logit.prob >= 0.5, 1, 0))
+pred.logit <- predict(cause.logit, newdata = dat_test)
+pred.logit2 <- prediction(pred.logit, dat_test$toast)
+confusionMatrix(data=pred.logit1, reference = dat_test$toast)
+
+
+plot(performance(pred.logit2, "tpr", "fpr"))
+text(0.6, 0.6, paste("AUC = ", performance(pred.logit2, "auc")@y.values[1]))
+
+```
+```{r echo=FALSE}
+# Bootstrap logistic regression
+N <- 500
+acc_lr_full <- rep(NA, N)
+acc_lr_light <- rep(NA, N)
+auc_lr_full <- rep(NA, N)
+auc_lr_light <- rep(NA, N)
+
+set.seed(206)
+
+for(i in 1:N){
+  
+  levels <- T
+  while(levels){
+    boot.indices <- sample(1:dim(dat_train)[1], replace=T)
+    boot.dat.train <- dat_train[boot.indices, ]
+    levels <- ifelse(is.element(0, as.numeric(table(boot.dat.train$tici))), T, F) # while loop to guarantee that all levels of tici are in                                                                                           # bootstrap sample.
+  }
+
+  
+  # Train
+  cause.logit.f <- glm(toast ~ ., data = boot.dat.train[c(1, 18, 30, 34, 36)], family=binomial)
+  cause.logit.l <- glm(toast ~ ., data = boot.dat.train[c(1, 6, 33, 32, 36)], family=binomial)
+  
+  # Test
+  pred.logit.prob.f <- predict(cause.logit.f, newdata = dat_test, type = "response")
+  pred.logit1.f <- as.factor(ifelse(pred.logit.prob.f >= 0.5, 1, 0))
+  pred.logit.f <- predict(cause.logit.f, newdata = dat_test)
+  pred.logit2.f <- prediction(pred.logit.f, dat_test$toast)
+  cm.f <- confusionMatrix(data=pred.logit1.f, reference = dat_test$toast)
+  
+  pred.logit.prob.l <- predict(cause.logit.l, newdata = dat_test, type = "response")
+  pred.logit1.l <- as.factor(ifelse(pred.logit.prob.l >= 0.5, 1, 0))
+  pred.logit.l <- predict(cause.logit.l, newdata = dat_test)
+  pred.logit2.l <- prediction(pred.logit.l, dat_test$toast)
+  cm.l <- confusionMatrix(data=pred.logit1.l, reference = dat_test$toast)
+  
+  
+  acc_lr_full[i] <- as.numeric(cm.f$overall)[1]
+  acc_lr_light[i] <- as.numeric(cm.l$overall)[1]
+  auc_lr_full[i] <- as.numeric(performance(pred.logit2.f, "auc")@y.values[1])
+  auc_lr_light[i] <- as.numeric(performance(pred.logit2.l, "auc")@y.values[1])
+  
+}
+
+mean_acc_lr.f <- mean(acc_lr_full)
+mean_acc_lr.l <- mean(acc_lr_light)
+mean_auc_lr.f <- mean(auc_lr_full)
+mean_auc_lr.l <- mean(auc_lr_light)
+
+CI_auc_lr_full <- quantile(auc_lr_full, c(0.025, 0.975))
+CI_auc_lr_light <- quantile(auc_lr_light, c(0.025, 0.975))
+CI_acc_lr_full <- quantile(acc_lr_full, c(0.025, 0.975))
+CI_acc_lr_light <- quantile(acc_lr_light, c(0.025, 0.975))
+
+
+```
+```{r, echo=F}
+# significance difference between auc? -> 
+library(coin)
+# assuming paired samples (computing two AUC values on same bootstrap train dataset)
+# check wheter distribution is the same regarding the variance of both samples
+var(auc_lr_light) / var(auc_lr_full) # Variance ratio = 0.8296934 -> assuming that distributions are more or less equal, yet shifted.
+
+# Mann-Whitney-U-test
+auc_df_lr <- data.frame(auc_full = auc_lr_full, auc_light = auc_lr_light)
+# H0: Median of Difference M >= 0, HA: M < 0
+alpha <- 0.05
+wilcoxsign_test(auc_df_lr$auc_full ~ auc_df_lr$auc_light, distribution="exact", conf.level = 1-alpha, alternative="greater")
+# p-value: 2.2e-16 << 0.05
+
+```
+
+```{r, echo=F}
+# Dependence Plots - Probability
+par(mar=c(5.1,4.1,4.1,2.1))
+# time to groin puncture
+ran <- range(dat$time_to_groin_puncture)
+steps <- seq(ran[1], ran[2], 0.1)
+N <- dim(dat)[1]
+preds <- matrix(NA, nrow=N, ncol=length(steps))
+for(i in 1:N){
+  df <- dat[i,]
+  for(ll in 2:length(steps)) df <- rbind(df, dat[i,])
+  df$time_to_groin_puncture <- steps
+  df$toast <- NULL
+  preds[i,] = predict(cause.logit, newdata = df, type = "response")
+}
+
+plot(NULL, xlim=c(-1,3), ylim=c(0,1), xlab="time_to_groin_puncture", ylab="P(cardioembolic)", las=T, cex.axis = 1.5, cex.lab = 1.5, main = "Logistic Regression")
+for(i in 1:N){
+  contr <- ifelse(dat[i,]$contradiction == 0, F, T)
+  obs_col <- ifelse(contr, "grey", ifelse(dat[i,]$toast == 0, "blue", "red"))
+  lines(steps, preds[i,], col = obs_col)
+  segments(dat$time_to_groin_puncture[i], 0, dat$time_to_groin_puncture[i], 0.03)
+  points(dat$time_to_groin_puncture[i], y = predict(cause.logit, newdata = dat[i,], type="response"), type = "p", pch = 16, cex = 0.6)
+}
+lines(steps, colMeans(preds), col="red4", lwd=3)
+legend("topright", inset=c(0,0), legend=c("0","1"), lty=c(1,1), lwd = 2, col=c("blue", "red"), title="True cause")
+
+
+
+# age
+ran <- range(dat$age)
+steps <- seq(ran[1], ran[2], 0.1)
+N <- dim(dat)[1]
+preds <- matrix(NA, nrow=N, ncol=length(steps))
+for(i in 1:N){
+  df <- dat[i,]
+  for(ll in 2:length(steps)) df <- rbind(df, dat[i,])
+  df$age <- steps
+  df$toast <- NULL
+  preds[i,] = predict(cause.logit, newdata = df, type = "response")
+}
+
+plot(NULL, xlim=c(-2,2), ylim=c(0,1), xlab="age", ylab="P(cardioembolic)", las=T, cex.axis = 1.5, cex.lab = 1.5, main = "Logistic Regression")
+for(i in 1:N){
+  contr <- ifelse(dat[i,]$contradiction == 0, F, T)
+  obs_col <- ifelse(contr, "grey", ifelse(dat[i,]$toast == 0, "blue", "red"))
+  lines(steps, preds[i,], col = obs_col)
+  segments(dat$age[i], 0, dat$age[i], 0.03)
+  points(dat$age[i], y = predict(cause.logit, newdata = dat[i,], type="response"), type = "p", pch = 16, cex = 0.6)
+}
+lines(steps, colMeans(preds), col="red4", lwd=3)
+legend("topright", inset=c(0,0), legend=c("0","1"), lty=c(1,1), lwd = 2, col=c("blue", "red"), title="True cause")
+
+```
+
+
+```{r, echo=F}
+# Dependence Plots - log odds
+par(mar=c(5.1,4.1,4.1,2.1))
+# time to groin puncture
+ran <- range(dat$time_to_groin_puncture)
+steps <- seq(ran[1], ran[2], 0.1)
+N <- dim(dat)[1]
+preds <- matrix(NA, nrow=N, ncol=length(steps))
+for(i in 1:N){
+  df <- dat[i,]
+  for(ll in 2:length(steps)) df <- rbind(df, dat[i,])
+  df$time_to_groin_puncture <- steps
+  df$toast <- NULL
+  preds[i,] = predict(cause.logit, newdata = df, type = "link")
+}
+
+plot(NULL, xlim=c(-1,3), ylim=c(-6,6), xlab="time_to_groin_puncture", ylab="log odds", las=T, cex.axis = 1.5, cex.lab = 1.5, main = "Logistic Regression")
+for(i in 1:N){
+  contr <- ifelse(dat[i,]$contradiction == 0, F, T)
+  obs_col <- ifelse(contr, "grey", ifelse(dat[i,]$toast == 0, "blue", "red"))
+  lines(steps, preds[i,], col = obs_col)
+  segments(dat$time_to_groin_puncture[i], -6, dat$time_to_groin_puncture[i], -5.5)
+  points(dat$time_to_groin_puncture[i], y = predict(cause.logit, newdata = dat[i,], type="link"), type = "p", pch = 16, cex = 0.6)
+}
+lines(steps, colMeans(preds), col="red4", lwd=3)
+legend("topright", inset=c(0,0), legend=c("0","1"), lty=c(1,1), lwd = 2, col=c("blue", "red"), title="True cause")
+
+
+
+# age
+ran <- range(dat$age)
+steps <- seq(ran[1], ran[2], 0.1)
+N <- dim(dat)[1]
+preds <- matrix(NA, nrow=N, ncol=length(steps))
+for(i in 1:N){
+  df <- dat[i,]
+  for(ll in 2:length(steps)) df <- rbind(df, dat[i,])
+  df$age <- steps
+  df$toast <- NULL
+  preds[i,] = predict(cause.logit, newdata = df, type = "link")
+}
+
+plot(NULL, xlim=c(-2,2), ylim=c(-6,6), xlab="age", ylab="log odds", las=T, cex.axis = 1.5, cex.lab = 1.5, main = "Logistic Regression")
+for(i in 1:N){
+  contr <- ifelse(dat[i,]$contradiction == 0, F, T)
+  obs_col <- ifelse(contr, "grey", ifelse(dat[i,]$toast == 0, "blue", "red"))
+  lines(steps, preds[i,], col = obs_col)
+  segments(dat$age[i], -6, dat$age[i], -5.5)
+  points(dat$age[i], y = predict(cause.logit, newdata = dat[i,], type="link"), type = "p", pch = 16, cex = 0.6)
+}
+lines(steps, colMeans(preds), col="red4", lwd=3)
+legend("topright", inset=c(0,0), legend=c("0","1"), lty=c(1,1), lwd = 2, col=c("blue", "red"), title="True cause")
+
+```
+
+
+
+
+```{r, echo=F, warning=F}
+# plot probabilities
+
+plot_data <- data.frame(True = dat_test$toast, Predicted = pred.logit.prob, Class = pred.logit1, atr = dat_test$atrial_fibrillation)
+
+# Plot scatterplot
+set.seed(206)
+ggplot(plot_data, aes(x = True, y = Predicted, color = Class)) +
+  geom_point(size=4, position = position_jitter(width = 0.1, height = 0)) +
+  geom_abline(intercept = 0.5, slope = 0, linetype = "dashed", color = "red") +
+  geom_boxplot(aes(x = Class, y = Predicted), alpha = 0.5, col = "black") +
+  labs(y= "P(cardioembolic)", x = "True Class") +
+  theme(text = element_text(size=18), axis.text.x = element_text(angle=0, hjust=1)) +
+  scale_color_manual(values = c("blue", "red"), name = "pred Class")
+
+plot_data <- data.frame(True = dat_test$toast, Predicted = pred.logit.prob, Class = pred.logit1, atr = dat_test$atrial_fibrillation)
+
+# Plot scatterplot
+set.seed(206)
+ggplot(plot_data, aes(x = True, y = Predicted, color = atr)) +
+  geom_point(size=4, position = position_jitter(width = 0.1, height = 0)) +
+  geom_abline(intercept = 0.5, slope = 0, linetype = "dashed", color = "red") +
+  geom_boxplot(aes(x = Class, y = Predicted), alpha = 0.5, col = "black") +
+  labs(y= "P(cardioembolic)", x = "True Class") +
+  theme(text = element_text(size=18), axis.text.x = element_text(angle=0, hjust=1)) +
+  scale_color_manual(values = c("magenta", "gold3"), name = "Atrial Fibrillation")
+
+
+```
+
+```{r, echo=F, warning=F}
+# plot probabilities 
+
+plot_data <- data.frame(True = dat_test$toast, Predicted = pred.logit.prob, Class = pred.logit1, antikoag = dat_test$antikoagulation_pre_stroke)
+
+# Plot scatterplot
+set.seed(206)
+ggplot(plot_data, aes(x = True, y = Predicted, color = antikoag)) +
+  geom_point(size=4, position = position_jitter(width = 0.1, height = 0)) +
+  geom_abline(intercept = 0.5, slope = 0, linetype = "dashed", color = "red") +
+  geom_boxplot(aes(x = Class, y = Predicted), alpha = 0.5, col = "black") +
+  scale_color_manual(values = c("steelblue", "green4"), name = "antikoagulation") +
+  labs(y= "P(cardioembolic)", x = "True Class") +
+  theme(text = element_text(size=18), axis.text.x = element_text(angle=0, hjust=1))
+
+
+```
+
+```{r, echo=F, warning=F}
+
+# Dependence Plots ONTRAM SI_LSx
+
+fold0 <- read.csv("C:/Users/morit/Documents/Fachhochschule/IDP/Projekte/Stroke/stroke_bern/ONTRAM_binary_cause/Results/20240129/estimates/estimates_0.csv")
+fold1 <- read.csv("C:/Users/morit/Documents/Fachhochschule/IDP/Projekte/Stroke/stroke_bern/ONTRAM_binary_cause/Results/20240129/estimates/estimates_1.csv")
+fold2 <- read.csv("C:/Users/morit/Documents/Fachhochschule/IDP/Projekte/Stroke/stroke_bern/ONTRAM_binary_cause/Results/20240129/estimates/estimates_2.csv")
+fold3 <- read.csv("C:/Users/morit/Documents/Fachhochschule/IDP/Projekte/Stroke/stroke_bern/ONTRAM_binary_cause/Results/20240129/estimates/estimates_3.csv")
+fold4 <- read.csv("C:/Users/morit/Documents/Fachhochschule/IDP/Projekte/Stroke/stroke_bern/ONTRAM_binary_cause/Results/20240129/estimates/estimates_4.csv")
+
+estimates <- rbind(fold0,fold1,fold2,fold3,fold4)
+
+
+library(boot)
+library(car)
+meanf <- function(z){
+  mean(z)
+}
+
+h_params <- apply(estimates, 2, FUN=meanf)
+
+
+trafo <- function(x){
+  h_params[1] - sum(h_params[2:13]*x)
+}
+
+# time to groin puncture
+ran <- range(dat$time_to_groin_puncture)
+steps <- seq(ran[1], ran[2], length.out=20)
+N <- dim(dat)[1]
+preds <- matrix(NA, nrow=N, ncol=length(steps))
+for(i in 1:N){
+  df <- dat[i,c(1,2,6,18,4,9,19,20,22,25,28,30)]
+  for(ll in 2:length(steps)) df <- rbind(df, dat[i,c(1,2,6,18,4,9,19,20,22,25,28,30)])
+  df$time_to_groin_puncture <- steps
+  df$toast <- NULL
+  df <- as.data.frame(apply(df, 2, as.numeric))
+  z <- apply(df, 1, trafo) # z, log odds
+  preds[i,] =  -z # 1 - (1 / (1 + exp(-z))) # 1 - f_Z(z), logistic function := P(y=1) = P(cardioembolic)
+}
+
+plot(NULL, xlim=c(-1,3), ylim=c(-6,6), xlab="time_to_groin_puncture", ylab="log odds", las=T, cex.axis = 1.5, cex.lab = 1.5, main = "SI_LSx")
+for(i in 1:N){
+  df <- dat[i,c(1,2,6,18,4,9,19,20,22,25,28,30)]
+  df <- as.data.frame(t(as.data.frame(apply(df, 2, as.numeric))))
+  z <- apply(df, 1, trafo) # z, log odds
+  contr <- ifelse(dat[i,]$contradiction == 0, F, T)
+  obs_col <- ifelse(contr, "grey", ifelse(dat[i,]$toast == 0, "blue", "red"))
+  lines(steps, preds[i,], col = obs_col)
+  segments(dat$time_to_groin_puncture[i], -6, dat$time_to_groin_puncture[i], -5.5)
+  points(dat$time_to_groin_puncture[i], y = -z, type = "p", pch = 16, cex = 0.6)
+}
+lines(steps, colMeans(preds), col="red4", lwd=3)
+legend("topright", inset=c(0,0), legend=c("0","1"), lty=c(1,1), lwd = 2, col=c("blue", "red"), title="True cause")
+
+
+# age
+ran <- range(dat$age)
+steps <- seq(ran[1], ran[2], length.out=20)
+N <- dim(dat)[1]
+preds <- matrix(NA, nrow=N, ncol=length(steps))
+for(i in 1:N){
+  df <- dat[i,c(1,2,6,18,4,9,19,20,22,25,28,30)]
+  for(ll in 2:length(steps)) df <- rbind(df, dat[i,c(1,2,6,18,4,9,19,20,22,25,28,30)])
+  df$age <- steps
+  df$toast <- NULL
+  df <- as.data.frame(apply(df, 2, as.numeric))
+  z <- apply(df, 1, trafo) # z, log odds
+  preds[i,] =  -z # 1 - (1 / (1 + exp(-z))) # 1 - f_Z(z), logistic function := P(y=1) = P(cardioembolic)
+}
+
+plot(NULL, xlim=c(-4,2), ylim=c(-6,6), xlab="age", ylab="log odds", las=T, cex.axis = 1.5, cex.lab = 1.5, main = "SI_LSx")
+for(i in 1:N){
+  df <- dat[i,c(1,2,6,18,4,9,19,20,22,25,28,30)]
+  df <- as.data.frame(t(as.data.frame(apply(df, 2, as.numeric))))
+  z <- apply(df, 1, trafo) # z, log odds
+  contr <- ifelse(dat[i,]$contradiction == 0, F, T)
+  obs_col <- ifelse(contr, "grey", ifelse(dat[i,]$toast == 0, "blue", "red"))
+  lines(steps, preds[i,], col = obs_col)
+  segments(dat$age[i], -6, dat$age[i], -5.5)
+  points(dat$age[i], y = -z, type = "p", pch = 16, cex = 0.6)
+}
+lines(steps, colMeans(preds), col="red4", lwd=3)
+legend("topright", inset=c(0,0), legend=c("0","1"), lty=c(1,1), lwd = 2, col=c("blue", "red"), title="True cause")
+
+
+
+# nihss_bl
+ran <- range(dat$nihss_bl)
+steps <- seq(ran[1], ran[2], length.out=20)
+N <- dim(dat)[1]
+preds <- matrix(NA, nrow=N, ncol=length(steps))
+for(i in 1:N){
+  df <- dat[i,c(1,2,6,18,4,9,19,20,22,25,28,30)]
+  for(ll in 2:length(steps)) df <- rbind(df, dat[i,c(1,2,6,18,4,9,19,20,22,25,28,30)])
+  df$nihss_bl <- steps
+  df$toast <- NULL
+  df <- as.data.frame(apply(df, 2, as.numeric))
+  z <- apply(df, 1, trafo) # z, log odds
+  preds[i,] =  -z # 1 - (1 / (1 + exp(-z))) # 1 - f_Z(z), logistic function := P(y=1) = P(cardioembolic)
+}
+
+plot(NULL, xlim=c(-2,3.5), ylim=c(-4,4), xlab="nihss_bl", ylab="log odds", las=T, cex.axis = 1.5, cex.lab = 1.5, main = "SI_LSx")
+for(i in 1:N){
+  df <- dat[i,c(1,2,6,18,4,9,19,20,22,25,28,30)]
+  df <- as.data.frame(t(as.data.frame(apply(df, 2, as.numeric))))
+  z <- apply(df, 1, trafo) # z, log odds
+  contr <- ifelse(dat[i,]$contradiction == 0, F, T)
+  obs_col <- ifelse(contr, "grey", ifelse(dat[i,]$toast == 0, "blue", "red"))
+  lines(steps, preds[i,], col = obs_col)
+  segments(dat$nihss_bl[i], -4, dat$nihss_bl[i], -3.5)
+  points(dat$nihss_bl[i], y = -z, type = "p", pch = 16, cex = 0.6)
+}
+lines(steps, colMeans(preds), col="red4", lwd=3)
+legend("topright", inset=c(0,0), legend=c("0","1"), lty=c(1,1), lwd = 2, col=c("blue", "red"), title="True cause")
+
+
+
+# sys_bloodpressure_bl
+ran <- range(dat$sys_bloodpressure_bl)
+steps <- seq(ran[1], ran[2], length.out=20)
+N <- dim(dat)[1]
+preds <- matrix(NA, nrow=N, ncol=length(steps))
+for(i in 1:N){
+  df <- dat[i,c(1,2,6,18,4,9,19,20,22,25,28,30)]
+  for(ll in 2:length(steps)) df <- rbind(df, dat[i,c(1,2,6,18,4,9,19,20,22,25,28,30)])
+  df$sys_bloodpressure_bl <- steps
+  df$toast <- NULL
+  df <- as.data.frame(apply(df, 2, as.numeric))
+  z <- apply(df, 1, trafo) # z, log odds
+  preds[i,] =  -z # 1 - (1 / (1 + exp(-z))) # 1 - f_Z(z), logistic function := P(y=1) = P(cardioembolic)
+}
+
+plot(NULL, xlim=c(-2,3), ylim=c(-5,5), xlab="sys_bloodpressure_bl", ylab="log odds", las=T, cex.axis = 1.5, cex.lab = 1.5, main = "SI_LSx")
+for(i in 1:N){
+  df <- dat[i,c(1,2,6,18,4,9,19,20,22,25,28,30)]
+  df <- as.data.frame(t(as.data.frame(apply(df, 2, as.numeric))))
+  z <- apply(df, 1, trafo) # z, log odds
+  contr <- ifelse(dat[i,]$contradiction == 0, F, T)
+  obs_col <- ifelse(contr, "grey", ifelse(dat[i,]$toast == 0, "blue", "red"))
+  lines(steps, preds[i,], col = obs_col)
+  segments(dat$sys_bloodpressure_bl[i], -5, dat$sys_bloodpressure_bl[i], -4.5)
+  points(dat$sys_bloodpressure_bl[i], y = -z, type = "p", pch = 16, cex = 0.6)
+}
+lines(steps, colMeans(preds), col="red4", lwd=3)
+legend("topright", inset=c(0,0), legend=c("0","1"), lty=c(1,1), lwd = 2, col=c("blue", "red"), title="True cause")
+
+``` 
+
+```{r, echo=F, warning=F}
+# GAM
+library(mgcv)
+library(gam)
+library(LaplacesDemon)
+library(oddsratio)
+cause.gam <- gam(toast ~ s(age) + s(time_to_groin_puncture) + 
+                    s(nihss_bl) + s(sys_bloodpressure_bl) +
+                    atrial_fibrillation + antikoagulation_pre_stroke, data = dat_train, family=binomial(link="logit"))
+#plot(cause.gam, resid=F, se=T)
+
+# age
+o <- order(dat_train$age)
+p <- predict(cause.gam, type = "terms", se.fit = TRUE)
+
+plot(dat_train$age[o], p$fit[,1][o], type="l", ylim=c(-40,20), las=T, xlab="standardized age", ylab="lo(age)",cex.lab=1.5, cex.axis=1.5, 
+     lwd=2)
+
+upr_age <- p$fit[,1] + (2*p$se.fit[,1])
+lwr_age <- p$fit[,1] - (2*p$se.fit[,1])
+
+lines(dat_train$age[o], lwr_age[o], lty=2, lwd=2, col="grey35")
+lines(dat_train$age[o], upr_age[o], lty=2, lwd=2, col="grey35")
+for(i in 1:dim(dat_train)[1]) segments(dat_train$age[i], -40, dat_train$age[i], -38.5)
+
+# time to groin puncture
+o <- order(dat_train$time_to_groin_puncture)
+plot(dat_train$time_to_groin_puncture[o], p$fit[,2][o], type="l", ylim=c(-30,20), las=T,
+     xlab="standardized time to groin puncture", ylab="lo(time to groin puncture)", cex.lab=1.5, cex.axis=1.5, lwd = 2)
+
+
+upr_tgp <- p$fit[,2] + (2*p$se.fit[,2])
+lwr_tgp <- p$fit[,2] - (2*p$se.fit[,2])
+
+lines(dat_train$time_to_groin_puncture[o], lwr_tgp[o], lty=2, lwd=2, col="grey35")
+lines(dat_train$time_to_groin_puncture[o], upr_tgp[o], lty=2, lwd=2, col="grey35")
+for(i in 1:dim(dat_train)[1]) segments(dat_train$time_to_groin_puncture[i], -30, dat_train$time_to_groin_puncture[i], -29)
+
+# nihss_bl
+o <- order(dat_train$nihss_bl)
+plot(dat_train$nihss_bl[o], p$fit[,3][o], type="l", ylim=c(-25,20), las=T,
+     xlab="standardized nihss_bl", ylab="lo(nihss_bl)", cex.lab=1.5, cex.axis=1.5, lwd = 2)
+
+
+upr_tgp <- p$fit[,3] + (2*p$se.fit[,3])
+lwr_tgp <- p$fit[,3] - (2*p$se.fit[,3])
+
+lines(dat_train$nihss_bl[o], lwr_tgp[o], lty=2, lwd=2, col="grey35")
+lines(dat_train$nihss_bl[o], upr_tgp[o], lty=2, lwd=2, col="grey35")
+for(i in 1:dim(dat_train)[1]) segments(dat_train$nihss_bl[i], -25, dat_train$nihss_bl[i], -24)
+
+
+# sys_bloodpressure_bl
+o <- order(dat_train$sys_bloodpressure_bl)
+plot(dat_train$sys_bloodpressure_bl[o], p$fit[,4][o], type="l", ylim=c(-10,10), las=T,
+     xlab="standardized sys_bloodpressure_bl", ylab="lo(sys_bloodpressure_bl)", cex.lab=1.5, cex.axis=1.5, lwd = 2, col="red2")
+
+
+upr_tgp <- p$fit[,4] + (2*p$se.fit[,4])
+lwr_tgp <- p$fit[,4] - (2*p$se.fit[,4])
+
+lines(dat_train$sys_bloodpressure_bl[o], lwr_tgp[o], lty=2, lwd=2, col="grey35")
+lines(dat_train$sys_bloodpressure_bl[o], upr_tgp[o], lty=2, lwd=2, col="grey35")
+for(i in 1:dim(dat_train)[1]) segments(dat_train$sys_bloodpressure_bl[i], -10, dat_train$sys_bloodpressure_bl[i], -9)
+
+```
